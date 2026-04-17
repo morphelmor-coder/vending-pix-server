@@ -72,19 +72,19 @@ app.post("/rota-recebimento", async (req, res) => {
             console.log(`💰 Pagamento: R$ ${valor} | TXID: ${txid}`);
             
             // Direciona para a máquina correta baseada no TXID
-            if (txid === "70dcb59b94eac9ccbm01abcde") {
+            if (txid === "VWnLMVAtxc1SKBIt21YfanMAq1") {
                 valorPixMaquina1 += valor;
                 console.log(`✅ Máquina 1 recebeu R$ ${valor}`);
             }
-            else if (txid === "flaksdfjaskldfjxyzabc12345") {
+            else if (txid === "VQnLNVAtxc2SGBIt32UfanMAq2") {
                 valorPixMaquina2 += valor;
                 console.log(`✅ Máquina 2 recebeu R$ ${valor}`);
             }
-            else if (txid === "maquina03pixabc12345678901") {
+            else if (txid === "LKnLMVBtxc3SRBIt43IfanMAq3") {
                 valorPixMaquina3 += valor;
                 console.log(`✅ Máquina 3 recebeu R$ ${valor}`);
             }
-            else if (txid === "maquina04pixxyz9876543210") {
+            else if (txid === "HJnLBVCtxc3SRBIt54DfanMAq4") {
                 valorPixMaquina4 += valor;
                 console.log(`✅ Máquina 4 recebeu R$ ${valor}`);
             }
@@ -112,6 +112,25 @@ app.get("/health", (req, res) => {
         maquina2: valorPixMaquina2,
         maquina3: valorPixMaquina3,
         maquina4: valorPixMaquina4
+    });
+});
+
+// ============================================
+// ENDPOINT DE DIAGNÓSTICO (ver o que a Efí envia)
+// ============================================
+
+app.post("/debug-webhook", async (req, res) => {
+    console.log("🔍 DEBUG - Webhook recebido CRU:");
+    console.log(JSON.stringify(req.body, null, 2));
+    console.log("🔍 DEBUG - Headers recebidos:");
+    console.log(JSON.stringify(req.headers, null, 2));
+    res.json({ ok: true });
+});
+
+app.get("/debug-webhook", (req, res) => {
+    res.json({ 
+        mensagem: "Endpoint de debug ativo",
+        instrucao: "Configure o webhook da Efi para esta URL para debug"
     });
 });
 
