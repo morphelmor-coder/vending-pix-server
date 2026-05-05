@@ -1,7 +1,5 @@
 node_modules
+build
+npm-debug.log
 .env
 .DS_Store
-*.p12
-*.pem
-certificado_base64.txt
-data.jason
