@@ -1,183 +1,150 @@
 const express = require('express');
-const bodyParser = require('body-parser');
-const EfiPay = require('sdk-node-apis-efi');
 const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
+require('dotenv').config();
 
 const app = express();
+const PORT = process.env.PORT || 5001;
+
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json());
 
-// Configurações da Efi Bank (devem vir de variáveis de ambiente no Render)
-const options = {
-  sandbox: process.env.EFI_SANDBOX === 'true',
-  client_id: process.env.EFI_CLIENT_ID,
-  client_secret: process.env.EFI_CLIENT_SECRET,
-  certificate: Buffer.from(process.env.EFI_CERTIFICATE_BASE64 || '', 'base64'),
-  cert_base64: true,
-  validateMtls: false // Importante para o Render.com (skip-mTLS)
-};
+// Variáveis para as 4 máquinas
+let valorPixMaquina1 = 0;
+let valorPixMaquina2 = 0;
+let valorPixMaquina3 = 0;
+let valorPixMaquina4 = 0;
 
-const efipay = new EfiPay(options);
-
-// Caminho para o arquivo de persistência
-const DATA_FILE = path.join(__dirname, 'data.json');
-
-// Estado das máquinas (armazenando os pulsos pendentes)
-// e mapeamento de txid para maquinaId
-let appState = {
-  pulsosPendentes: {
-    '1': 0,
-    '2': 0,
-    '3': 0,
-    '4': 0
-  },
-  txidToMaquinaId: {} // Mapeia txid gerado pela Efi para maquinaId
-};
-
-// Função para carregar o estado do arquivo
-function loadState() {
-  if (fs.existsSync(DATA_FILE)) {
-    const data = fs.readFileSync(DATA_FILE, 'utf8');
-    appState = JSON.parse(data);
-    console.log('Estado carregado do arquivo:', appState);
-  } else {
-    console.log('Arquivo de estado não encontrado. Iniciando com estado padrão.');
-  }
+// Função para converter valor em pulsos (1 real = 1 pulso)
+function converterPulsos(valorPix) {
+    const ticket = 1;
+    if (valorPix > 0 && valorPix >= ticket) {
+        const pulsos = Math.floor(valorPix / ticket);
+        return ("0000" + pulsos).slice(-4);
+    }
+    return "0000";
 }
 
-// Função para salvar o estado no arquivo
-function saveState() {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(appState, null, 2), 'utf8');
-  console.log('Estado salvo no arquivo.');
-}
+// ============================================
+// ENDPOINTS PARA CADA MÁQUINA (ESP32 consulta)
+// ============================================
 
-// Carregar o estado ao iniciar o servidor
-loadState();
-
-// Rota para o ESP32 consultar se há pulsos pendentes para uma máquina específica
-app.get('/api/maquina/:id/pulsos', (req, res) => {
-  const maquinaId = req.params.id;
-  
-  if (appState.pulsosPendentes[maquinaId] === undefined) {
-    return res.status(404).json({ error: 'Máquina não encontrada' });
-  }
-
-  const pulsos = appState.pulsosPendentes[maquinaId];
-  
-  // Se o ESP32 consultou e tinha pulsos, zeramos o contador (assumindo que ele vai processar)
-  if (pulsos > 0) {
-    appState.pulsosPendentes[maquinaId] = 0;
-    saveState(); // Salvar o estado após zerar os pulsos
-  }
-
-  res.json({ maquina: maquinaId, pulsos: pulsos });
+app.get("/consulta-maquina1", async (req, res) => {
+    const pulsos = converterPulsos(valorPixMaquina1);
+    valorPixMaquina1 = 0;
+    console.log(`📟 Máquina 1: ${pulsos} pulsos`);
+    res.json({ retorno: pulsos });
 });
 
-// Rota para gerar a cobrança Pix (QR Code) para uma máquina específica
-app.post('/api/gerar-pix', async (req, res) => {
-  const { maquinaId, valor } = req.body; // valor em reais, ex: 5.00
-
-  if (!maquinaId || !valor) {
-    return res.status(400).json({ error: 'maquinaId e valor são obrigatórios' });
-  }
-
-  const body = {
-    calendario: {
-      expiracao: 3600
-    },
-    valor: {
-      original: parseFloat(valor).toFixed(2)
-    },
-    chave: process.env.EFI_CHAVE_PIX,
-    infoAdicionais: [
-      {
-        nome: 'Maquina',
-        valor: String(maquinaId)
-      }
-    ]
-  };
-
-  try {
-    const response = await efipay.pixCreateImmediateCharge([], body);
-    
-    // Armazenar o mapeamento txid -> maquinaId
-    appState.txidToMaquinaId[response.txid] = maquinaId;
-    saveState(); // Salvar o estado após adicionar o mapeamento
-
-    // Gerar o QR Code a partir do loc.id
-    const qrCodeResponse = await efipay.pixGenerateQRCode({ locId: response.loc.id });
-    
-    res.json({
-      txid: response.txid,
-      qrCode: qrCodeResponse.qrcode,
-      imagemQrCode: qrCodeResponse.imagemQrcode
-    });
-  } catch (error) {
-    console.error('Erro ao gerar Pix:', error);
-    res.status(500).json({ error: 'Falha ao gerar cobrança Pix' });
-  }
+app.get("/consulta-maquina2", async (req, res) => {
+    const pulsos = converterPulsos(valorPixMaquina2);
+    valorPixMaquina2 = 0;
+    console.log(`📟 Máquina 2: ${pulsos} pulsos`);
+    res.json({ retorno: pulsos });
 });
 
-// Webhook para receber a notificação de pagamento da Efi Bank
-app.post('/webhook(/pix)?', (req, res) => {
-  console.log('Webhook recebido:', JSON.stringify(req.body, null, 2));
-  
-  // A Efi Bank envia um array de pix
-  if (req.body.pix && Array.isArray(req.body.pix)) {
-    req.body.pix.forEach(pagamento => {
-      // Verifica se o pagamento foi concluído
-      if (pagamento.valor && pagamento.txid) {
-        const valorPago = parseFloat(pagamento.valor);
-        const txidRecebido = pagamento.txid;
+app.get("/consulta-maquina3", async (req, res) => {
+    const pulsos = converterPulsos(valorPixMaquina3);
+    valorPixMaquina3 = 0;
+    console.log(`📟 Máquina 3: ${pulsos} pulsos`);
+    res.json({ retorno: pulsos });
+});
+
+app.get("/consulta-maquina4", async (req, res) => {
+    const pulsos = converterPulsos(valorPixMaquina4);
+    valorPixMaquina4 = 0;
+    console.log(`📟 Máquina 4: ${pulsos} pulsos`);
+    res.json({ retorno: pulsos });
+});
+
+// ============================================
+// WEBHOOK - EFI BANK CHAMA AQUI
+// ============================================
+
+app.post("/rota-recebimento", async (req, res) => {
+    try {
+        console.log("📨 Webhook recebido:", JSON.stringify(req.body, null, 2));
         
-        // Recuperar o maquinaId usando o mapeamento txidToMaquinaId
-        const maquinaId = appState.txidToMaquinaId[txidRecebido];
-
-        if (maquinaId && appState.pulsosPendentes[maquinaId] !== undefined) {
-          // Converter valor em pulsos (R$ 1,00 = 1 pulso)
-          const pulsos = Math.floor(valorPago);
-          appState.pulsosPendentes[maquinaId] += pulsos;
-          console.log(`Adicionado ${pulsos} pulsos para a máquina ${maquinaId}. Total: ${appState.pulsosPendentes[maquinaId]}`);
-          saveState(); // Salvar o estado após adicionar os pulsos
-
-          // Opcional: Remover o txid do mapeamento após o pagamento ser processado
-          delete appState.txidToMaquinaId[txidRecebido];
-          saveState(); // Salvar o estado após remover o txid
-        } else {
-          console.warn(`TXID ${txidRecebido} não encontrado ou maquinaId inválido no mapeamento.`);
+        if (req.body.pix && req.body.pix.length > 0) {
+            const pix = req.body.pix[0];
+            const valor = parseFloat(pix.valor);
+            const txid = pix.txid;
+            
+            console.log(`💰 Pagamento: R$ ${valor} | TXID: ${txid}`);
+            
+            // Direciona para a máquina correta baseada no TXID
+            if (txid === "VWnLMVAtxc1SKBIt21YfanMAq1") {
+                valorPixMaquina1 += valor;
+                console.log(`✅ Máquina 1 recebeu R$ ${valor}`);
+            }
+            else if (txid === "VQnLNVAtxc2SGBIt32UfanMAq2") {
+                valorPixMaquina2 += valor;
+                console.log(`✅ Máquina 2 recebeu R$ ${valor}`);
+            }
+            else if (txid === "LKnLMVBtxc3SRBIt43IfanMAq3") {
+                valorPixMaquina3 += valor;
+                console.log(`✅ Máquina 3 recebeu R$ ${valor}`);
+            }
+            else if (txid === "HJnLBVCtxc3SRBIt54DfanMAq4") {
+                valorPixMaquina4 += valor;
+                console.log(`✅ Máquina 4 recebeu R$ ${valor}`);
+            }
+            else {
+                console.log(`⚠️ TXID não reconhecido: ${txid}`);
+            }
         }
-      }
+        
+        res.json({ ok: true });
+    } catch (error) {
+        console.error("Erro no webhook:", error);
+        res.json({ ok: false });
+    }
+});
+
+// ============================================
+// ENDPOINT DE DIAGNÓSTICO (para testar o webhook)
+// ============================================
+
+app.post("/debug-webhook", async (req, res) => {
+    console.log("🔍 DEBUG - Webhook recebido CRU:");
+    console.log(JSON.stringify(req.body, null, 2));
+    console.log("🔍 DEBUG - Headers recebidos:");
+    console.log(JSON.stringify(req.headers, null, 2));
+    res.json({ ok: true });
+});
+
+app.get("/debug-webhook", (req, res) => {
+    res.json({ 
+        mensagem: "Endpoint de debug ativo",
+        instrucao: "Configure o webhook da Efi para esta URL para debug"
     });
-  }
-
-  // A Efi Bank exige que o webhook retorne 200 OK
-  res.status(200).send();
 });
 
-// Rota para configurar o Webhook na Efi Bank (rodar uma vez)
-app.post('/api/configurar-webhook', async (req, res) => {
-  const { webhookUrl } = req.body; // A URL do seu app no Render, ex: https://seu-app.onrender.com/webhook
-  
-  const params = {
-    chave: process.env.EFI_CHAVE_PIX
-  };
+// ============================================
+// HEALTH CHECK
+// ============================================
 
-  const body = {
-    webhookUrl: webhookUrl
-  };
-
-  try {
-    // Importante: validateMtls = false nas options do EfiPay para o Render
-    const response = await efipay.pixConfigWebhook(params, body);
-    res.json(response);
-  } catch (error) {
-    console.error('Erro ao configurar webhook:', error);
-    res.status(500).json({ error: 'Falha ao configurar webhook', detalhes: error });
-  }
+app.get("/health", (req, res) => {
+    res.json({ 
+        status: "online", 
+        timestamp: new Date(),
+        maquina1: valorPixMaquina1,
+        maquina2: valorPixMaquina2,
+        maquina3: valorPixMaquina3,
+        maquina4: valorPixMaquina4
+    });
 });
 
-const PORT = process.env.PORT || 3000;
+// ============================================
+// INICIALIZAÇÃO
+// ============================================
+
 app.listen(PORT, () => {
-  console.log(`Servidor rodando na porta ${P
+    console.log(`🚀 Servidor rodando na porta ${PORT}`);
+    console.log(`GET  /consulta-maquina1`);
+    console.log(`GET  /consulta-maquina2`);
+    console.log(`GET  /consulta-maquina3`);
+    console.log(`GET  /consulta-maquina4`);
+    console.log(`POST /rota-recebimento`);
+    console.log(`POST /debug-webhook (para testes)`);
+    console.log(`GET  /health`);
+});
